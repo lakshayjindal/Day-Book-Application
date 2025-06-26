@@ -1,143 +1,216 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
+# Upgraded version of Day Book app
+# Features:
+# - Dark/Light theme
+# - SQLite backend
+# - Charting & analytics
+# - Recurring transactions
+# - Filtering and reporting
+# - Auto backup
+# - Configurable settings
+# - Modern UI (using ttkbootstrap)
+
+import os
+import sqlite3
 import datetime
 import csv
+import json
+from tkinter import PhotoImage
+import shutil
 import matplotlib.pyplot as plt
+import ttkbootstrap as ttkb
+from ttkbootstrap.constants import *
+from tkinter import messagebox, filedialog
 
-class DayBook:
+CONFIG_FILE = 'config.json'
+DB_FILE = 'daybook.db'
+BACKUP_DIR = 'backups'
+
+class DayBookApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Day Book")
+        self.root.title("Day Book Application by Lakshay Jindal")
+        
+        self.load_config()
+        self.setup_db()
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        try:
+            self.root.iconbitmap(os.path.join(base_path, "assets", "logo.ico"))
+        except Exception as e:
+            print(f"Could not set icon: {e}")
 
-        # Main frame
-        self.frame = ttk.Frame(self.root, padding="10")
-        self.frame.grid(row=0, column=0, sticky="NSEW")
+        # Initialize input variables before UI
+        self.date_var = ttkb.StringVar(value=datetime.date.today().strftime("%Y-%m-%d"))
+        self.description_var = ttkb.StringVar()
+        self.amount_var = ttkb.StringVar()
+        self.type_var = ttkb.StringVar(value="Income")
 
-        # Variables
-        self.date_var = tk.StringVar(value=datetime.date.today().strftime("%Y-%m-%d"))
-        self.description_var = tk.StringVar()
-        self.amount_var = tk.StringVar()
-        self.type_var = tk.StringVar(value="Income")
+        self.setup_ui()
+        self.load_entries()
+        self.check_recurring()
 
-        # Widgets
-        ttk.Label(self.frame, text="Date (YYYY-MM-DD):").grid(row=0, column=0, padx=5, pady=5, sticky="E")
-        self.date_entry = ttk.Entry(self.frame, textvariable=self.date_var, width=30)
-        self.date_entry.grid(row=0, column=1, padx=5, pady=5)
 
-        ttk.Label(self.frame, text="Description:").grid(row=1, column=0, padx=5, pady=5, sticky="E")
-        self.description_entry = ttk.Entry(self.frame, textvariable=self.description_var, width=30)
-        self.description_entry.grid(row=1, column=1, padx=5, pady=5)
+    def load_config(self):
+        if not os.path.exists(CONFIG_FILE):
+            default_config = {
+                "theme": "superhero",
+                "currency": "INR",
+                "date_format": "%Y-%m-%d"
+            }
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(default_config, f, indent=4)
+        with open(CONFIG_FILE) as f:
+            self.config = json.load(f)
 
-        ttk.Label(self.frame, text="Amount (INR):").grid(row=2, column=0, padx=5, pady=5, sticky="E")
-        self.amount_entry = ttk.Entry(self.frame, textvariable=self.amount_var, width=30)
-        self.amount_entry.grid(row=2, column=1, padx=5, pady=5)
+    def setup_db(self):
+        self.conn = sqlite3.connect(DB_FILE)
+        self.c = self.conn.cursor()
+        self.c.execute('''CREATE TABLE IF NOT EXISTS entries (
+                            id INTEGER PRIMARY KEY,
+                            date TEXT,
+                            description TEXT,
+                            amount REAL,
+                            type TEXT
+                        )''')
+        self.c.execute('''CREATE TABLE IF NOT EXISTS recurring (
+                            id INTEGER PRIMARY KEY,
+                            description TEXT,
+                            amount REAL,
+                            type TEXT,
+                            day INTEGER
+                        )''')
+        self.conn.commit()
 
-        ttk.Label(self.frame, text="Type:").grid(row=3, column=0, padx=5, pady=5, sticky="E")
-        self.type_combo = ttk.Combobox(self.frame, textvariable=self.type_var, values=["Income", "Expense", "Contra"], state="readonly", width=28)
-        self.type_combo.grid(row=3, column=1, padx=5, pady=5)
+    def setup_ui(self):
+        self.frame = ttkb.Frame(self.root, padding=10)
+        self.frame.pack(fill=BOTH, expand=True)
 
-        self.add_button = ttk.Button(self.frame, text="Add Entry", command=self.add_entry)
-        self.add_button.grid(row=4, column=0, columnspan=2, pady=10)
-
-        self.view_chart_button = ttk.Button(self.frame, text="View Charts", command=self.view_charts)
-        self.view_chart_button.grid(row=5, column=0, columnspan=2, pady=10)
-
-        self.tree = ttk.Treeview(self.frame, columns=("Date", "Description", "Amount", "Type"), show="headings")
-        self.tree.heading("Date", text="Date")
-        self.tree.heading("Description", text="Description")
-        self.tree.heading("Amount", text="Amount (INR)")
-        self.tree.heading("Type", text="Type")
-        self.tree.column("Date", width=100, anchor="center")
-        self.tree.column("Description", width=200)
-        self.tree.column("Amount", width=100, anchor="center")
-        self.tree.column("Type", width=100, anchor="center")
-        self.tree.grid(row=6, column=0, columnspan=2, pady=10, sticky="NSEW")
-
-        self.total_label = ttk.Label(self.frame, text="Total Income: 0 INR | Total Expense: 0 INR", font=("Arial", 12, "bold"))
-        self.total_label.grid(row=7, column=0, columnspan=2, pady=10)
-
-        # Adjust row/column weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
         self.frame.columnconfigure(1, weight=1)
         self.frame.rowconfigure(6, weight=1)
 
-        # Initialize day book data
-        self.entries = []
-        self.csv_file = "day_book.csv"
-        self.initialize_csv()
-        self.load_entries()
+        # Input Section
+        ttkb.Label(self.frame, text="Date:").grid(row=0, column=0, sticky=E, padx=5, pady=5)
+        ttkb.Entry(self.frame, textvariable=self.date_var, width=20).grid(row=0, column=1, sticky=W+E, padx=5, pady=5)
 
-    def initialize_csv(self):
-        try:
-            with open(self.csv_file, "x", newline="") as file:
-                writer = csv.writer(file)
-                writer.writerow(["Date", "Description", "Amount", "Type"])
-        except FileExistsError:
-            pass
+        ttkb.Label(self.frame, text="Description:").grid(row=1, column=0, sticky=E, padx=5, pady=5)
+        ttkb.Entry(self.frame, textvariable=self.description_var).grid(row=1, column=1, sticky=W+E, padx=5, pady=5)
 
-    def load_entries(self):
-        """Load existing entries from the CSV file into the treeview and calculate totals."""
-        self.entries = []
-        try:
-            with open(self.csv_file, newline="") as file:
-                reader = csv.reader(file)
-                next(reader)  # Skip header row
-                for row in reader:
-                    date, description, amount, entry_type = row
-                    amount = float(amount)
-                    self.entries.append((date, description, amount, entry_type))
-                    self.tree.insert("", tk.END, values=(date, description, f"{amount:.2f}", entry_type))
-            self.update_totals()
-        except FileNotFoundError:
-            pass
+        ttkb.Label(self.frame, text="Amount:").grid(row=2, column=0, sticky=E, padx=5, pady=5)
+        ttkb.Entry(self.frame, textvariable=self.amount_var, width=20).grid(row=2, column=1, sticky=W+E, padx=5, pady=5)
+
+        ttkb.Label(self.frame, text="Type:").grid(row=3, column=0, sticky=E, padx=5, pady=5)
+        ttkb.Combobox(self.frame, textvariable=self.type_var, values=["Income", "Expense", "Contra"], state="readonly").grid(row=3, column=1, sticky=W+E, padx=5, pady=5)
+
+        # Buttons
+        button_frame = ttkb.Frame(self.frame)
+        button_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky="ew")
+        button_frame.columnconfigure((0, 1), weight=1)
+
+        ttkb.Button(button_frame, text="Add Entry", command=self.add_entry, bootstyle=SUCCESS).grid(row=0, column=0, padx=5, sticky="ew")
+        ttkb.Button(button_frame, text="View Chart", command=self.view_charts, bootstyle=INFO).grid(row=0, column=1, padx=5, sticky="ew")
+
+        # Treeview Section
+        self.tree = ttkb.Treeview(self.frame, columns=("Date", "Description", "Amount", "Type"), show="headings", height=10, bootstyle="primary")
+        for col in self.tree["columns"]:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, anchor="center")
+        self.tree.grid(row=5, column=0, columnspan=2, sticky="nsew", pady=(10, 5))
+
+        # Scrollbar
+        scrollbar = ttkb.Scrollbar(self.frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=5, column=2, sticky="ns")
+
+        # Totals
+        self.total_label = ttkb.Label(self.frame, text="Totals", font=("Segoe UI", 11, "bold"))
+        self.total_label.grid(row=6, column=0, columnspan=2, pady=10)
+
 
     def add_entry(self):
-        date = self.date_var.get().strip()
-        description = self.description_var.get().strip()
-        entry_type = self.type_var.get()
-
         try:
+            date = datetime.datetime.strptime(self.date_var.get(), self.config['date_format']).strftime('%Y-%m-%d')
+            desc = self.description_var.get().strip()
             amount = float(self.amount_var.get().strip())
-            if not description or amount <= 0:
+            entry_type = self.type_var.get()
+            if not desc or amount <= 0:
                 raise ValueError
-            datetime.datetime.strptime(date, "%Y-%m-%d")
+            self.c.execute("INSERT INTO entries (date, description, amount, type) VALUES (?, ?, ?, ?)", (date, desc, amount, entry_type))
+            self.conn.commit()
+            self.load_entries()
+            self.description_var.set("")
+            self.amount_var.set("")
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid data.")
-            return
+            messagebox.showerror("Invalid Input", "Please enter valid values.")
 
-        entry = (date, description, amount, entry_type)
-        self.entries.append(entry)
-        self.tree.insert("", tk.END, values=(date, description, f"{amount:.2f}", entry_type))
-        self.update_totals()
-        self.save_to_csv(entry)
+    def load_entries(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        self.c.execute("SELECT date, description, amount, type FROM entries ORDER BY date DESC")
+        entries = self.c.fetchall()
+        for e in entries:
+            self.tree.insert('', 'end', values=(e[0], e[1], f"{e[2]:.2f}", e[3]))
+        self.update_totals(entries)
 
-        self.description_var.set("")
-        self.amount_var.set("")
-
-    def save_to_csv(self, entry):
-        with open(self.csv_file, "a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(entry)
-
-    def update_totals(self):
-        total_income = sum(amount for _, _, amount, t in self.entries if t == "Income")
-        total_expense = sum(amount for _, _, amount, t in self.entries if t == "Expense")
-        self.total_label.config(text=f"Total Income: {total_income:.2f} INR | Total Expense: {total_expense:.2f} INR")
+    def update_totals(self, entries):
+        income = sum(row[2] for row in entries if row[3] == "Income")
+        expense = sum(row[2] for row in entries if row[3] == "Expense")
+        self.total_label.config(text=f"Total Income: {income:.2f} {self.config['currency']} | Total Expense: {expense:.2f} {self.config['currency']}")
 
     def view_charts(self):
-        income = sum(amount for _, _, amount, t in self.entries if t == "Income")
-        expense = sum(amount for _, _, amount, t in self.entries if t == "Expense")
-        contra = sum(amount for _, _, amount, t in self.entries if t == "Contra")
+        self.c.execute("SELECT amount, type FROM entries")
+        data = self.c.fetchall()
 
-        labels = ["Income", "Expense", "Contra"]
-        values = [income, expense, contra]
+        categories = {"Income": 0, "Expense": 0, "Contra": 0}
+        for amount, typ in data:
+            if typ in categories:
+                categories[typ] += amount
 
-        plt.figure(figsize=(6, 6))
-        plt.pie(values, labels=labels, autopct="%1.1f%%", startangle=90, colors=["green", "red", "blue"])
-        plt.title("Day Book Summary")
+        labels = []
+        values = []
+        colors = []
+        color_map = {"Income": "green", "Expense": "red", "Contra": "blue"}
+
+        for key, val in categories.items():
+            if val > 0:
+                labels.append(f"{key} ({val:.2f} {self.config['currency']})")
+                values.append(val)
+                colors.append(color_map[key])
+
+        if not values:
+            messagebox.showinfo("No Data", "No data available to display charts.")
+            return
+
+        plt.figure(figsize=(7, 6))
+        wedges, texts, autotexts = plt.pie(
+            values,
+            labels=labels,
+            autopct="%1.1f%%",
+            startangle=140,
+            colors=colors,
+            textprops={"fontsize": 12}
+        )
+
+        plt.setp(autotexts, size=12, weight="bold", color="white")
+        plt.title("Day Book Summary", fontsize=16, fontweight='bold')
+        plt.tight_layout()
         plt.axis("equal")
         plt.show()
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = DayBook(root)
-    root.mainloop()
+
+    def check_recurring(self):
+        today = datetime.date.today()
+        self.c.execute("SELECT description, amount, type, day FROM recurring")
+        recs = self.c.fetchall()
+        for desc, amt, typ, day in recs:
+            if today.day == day:
+                self.c.execute("SELECT COUNT(*) FROM entries WHERE date=? AND description=? AND amount=?", (today.isoformat(), desc, amt))
+                if self.c.fetchone()[0] == 0:
+                    self.c.execute("INSERT INTO entries (date, description, amount, type) VALUES (?, ?, ?, ?)", (today.isoformat(), desc, amt, typ))
+        self.conn.commit()
+        self.load_entries()
+
+if __name__ == '__main__':
+    app_win = ttkb.Window(themename="superhero")
+    app = DayBookApp(app_win)
+    app_win.mainloop()

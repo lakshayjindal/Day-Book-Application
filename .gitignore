@@ -1,0 +1,9 @@
+.env/
+
+install.iss
+build/
+dist/
+assets/innosetup-6.4.3.exe
+main.spec
+day_book.csv
+daybook.db
